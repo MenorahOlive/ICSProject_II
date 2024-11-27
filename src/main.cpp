@@ -1,47 +1,62 @@
-#include <Arduino.h>
+
+#include "thingProperties.h"
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
 
 // MPU6050
 Adafruit_MPU6050 mpu;
+sensors_event_t a, g, temp;
 
-// Fall/Tilt Detection Thresholds
-const float accelZFallThreshold = 5.0;  // Acceleration below this indicates a fall
-const float gyroZTiltThreshold = 2.0;   // Angular velocity above this indicates tilting
+// Motion Detection Thresholds
+const float accelZFallThreshold = 5.0;
+const float gyroZTiltThreshold = 2.0;
 
 // Flags for detection
 bool fallDetected = false;
 bool tiltDetected = false;
 
-// Motor A
+// Motor Pins
 int motor1Pin1 = 26; 
 int motor1Pin2 = 27; 
 int enablePinA = 25; 
-// Motor B 
 int motor2Pin1 = 14; 
 int motor2Pin2 = 12; 
 int enablePinB = 13; 
-// Ultrasonic Sensor 
+
+// Ultrasonic Sensor
 const int trigPin = 32;
 const int echoPin = 33;
-// Buzzer 
+
+// Buzzer
 const int buzzer = 19;
-//default command
-String currentCommand = "STOP"; 
+
+// Cloud Variables
+float acc_x, acc_y, acc_z;
+float gyro_x, gyro_y, gyro_z;
+CloudSwitch backward, forward, left, right, halt;
+CloudLocation gps;
+bool obstacle = false;
+
 
 void setup() {
-  // Initialize Serial Communication
+   // Initialize Serial Communication
   Serial.begin(115200);
 
   // MPU6050 Initialization
-  if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
-    while (1) delay(10);
-  }
+ if (!mpu.begin()) {
+    Serial.println("Failed to initialize MPU6050 chip");
+    delay(5000); 
+}
   Serial.println("MPU6050 Initialized!");
 
-  //setup motion detection
+  // Initialize Cloud Variables
+  initProperties();
+  ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+  setDebugMessageLevel(2);
+  ArduinoCloud.printDebugInfo();
+  
+      //setup motion detection
   mpu.setHighPassFilter(MPU6050_HIGHPASS_0_63_HZ);
   mpu.setMotionDetectionThreshold(1);
   mpu.setMotionDetectionDuration(20);
@@ -67,133 +82,67 @@ void setup() {
   // Initialize Buzzer Pin
   pinMode(buzzer, OUTPUT);
 
+  // Initialize CloudSwitch variables to false
+  backward = forward = left = right = false;
+  halt = true;
+
   // Stop Motors Initially
   stopMotors();
 }
 
 void loop() {
-  if (Serial.available() > 0) {
-    String command = Serial.readString();
-    command.trim();
-    Serial.print("Command: ");
-    Serial.println(command);
-    //check command 
-    if (command.equalsIgnoreCase("STOP")) {
-      currentCommand = "STOP"; 
-      stopMotors();
-    } else {
-      currentCommand = command; 
-    }
-  }
-  //check for obstacles 
-  int distance = getDistance();
-  if (distance != -1 && distance < 20) { 
-    Serial.println("OBSTACLE DETECTED!");
-    stopMotors();
-    currentCommand = "STOP";
-    for (int i = 0; i < 4; i++){
-    tone(buzzer, 400);
-    delay(500);
-    noTone(buzzer);
-    } 
-  } 
-  // Execute the current command
-  if (!currentCommand.equalsIgnoreCase("STOP")) {
-    directMotors(currentCommand);
-  }
-  delay(100); 
+  ArduinoCloud.update();
 
-  // Check MPU6050 for fall or tilt detection
-  if (checkFallOrTilt()) {
-    triggerEmergencyStop();
-    return; // Skip further processing
-  }
-}
-//Detect obstacles using Ultrasonic Sensor 
-int getDistance() {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(trigPin, LOW);
-  int duration = pulseIn(echoPin, HIGH);
-  if (duration == 0) {
-    Serial.println("Sensor timeout. Invalid distance.");
-    return -1; 
-  }
-  return duration * 0.034 / 2;
-}
-
-void directMotors(String command) {
-  command.toLowerCase();
-  if (command == "forward") {
-    Serial.println("Moving Forward");
-    setMotors(HIGH, LOW, HIGH, LOW);
-  } else if (command == "backward") {
-    Serial.println("Moving Backward");
-    setMotors(LOW, HIGH, LOW, HIGH);
-  } else if (command == "left") {
-    Serial.println("Turning Left");
-    setMotors(LOW, LOW, LOW, HIGH);
-  } else if (command == "right") {
-    Serial.println("Turning Right");
-    setMotors(LOW, HIGH, LOW, LOW);
-  } else if (command == "stop") {
-    Serial.println("Stopping Motors");
-    stopMotors();
-  } else {
-    Serial.println("Unknown Command");
-  }
-}
-bool checkFallOrTilt() {
-  if (mpu.getMotionInterruptStatus()) {
-    // Get new sensor events with the readings
-    sensors_event_t a, g, temp;
-    mpu.getEvent(&a, &g, &temp);
-
-    // Print out the values for debugging
-    Serial.print("AccelX:");
-    Serial.print(a.acceleration.x);
-    Serial.print(", ");
-    Serial.print("AccelY:");
-    Serial.print(a.acceleration.y);
-    Serial.print(", ");
-    Serial.print("AccelZ:");
-    Serial.print(a.acceleration.z);
-    Serial.print(", ");
-    Serial.print("GyroX:");
-    Serial.print(g.gyro.x);
-    Serial.print(", ");
-    Serial.print("GyroY:");
-    Serial.print(g.gyro.y);
-    Serial.print(", ");
-    Serial.print("GyroZ:");
-    Serial.print(g.gyro.z);
-    Serial.println("");
-
-    // Fall Detection
-    if (a.acceleration.z < accelZFallThreshold && !fallDetected) {
-      Serial.println("FALL DETECTED!");
-      fallDetected = true;
-      return true;
-    } else if (a.acceleration.z >= accelZFallThreshold) {
-      fallDetected = false;
+  //Motor Controls synced with cloudswitch variables 
+    onObstacleChange();
+    if (!obstacle) { // Only process commands if no obstacle is detected
+        onForwardChange();
+        onBackwardChange();
+        onLeftChange();
+        onRightChange();
+        onHaltChange();
     }
 
-    // Tilt Detection
-    if (abs(g.gyro.z) > gyroZTiltThreshold && !tiltDetected) {
-      Serial.println("TILT DETECTED!");
-      tiltDetected = true;
-      return true;
-    } else if (abs(g.gyro.z) <= gyroZTiltThreshold) {
-      tiltDetected = false;
-    }
-  }
+   // Handle motion detection
+    if (mpu.getMotionInterruptStatus()) {
+      mpu.getEvent(&a, &g, &temp);
 
-  delay(10); // Optional, may want to minimize for real-time responsiveness
-  return false;
+      acc_x = a.acceleration.x;
+      acc_y = a.acceleration.y;
+      acc_z = a.acceleration.z;
+      gyro_x = g.gyro.x;
+      gyro_y = g.gyro.y;
+      gyro_z = g.gyro.z;
+
+      onAccZChange();
+      onGyroZChange();
+    }
+
+    
 }
 
+// Movement Functions
+void moveForward() {
+  Serial.println("Moving Forward");
+  setMotors(HIGH, LOW, HIGH, LOW);
+}
+
+void moveBackward() {
+  Serial.println("Moving Backward");
+  setMotors(LOW, HIGH, LOW, HIGH);
+}
+
+void turnLeft() {
+  Serial.println("Turning Left");
+  setMotors(LOW, LOW, LOW, HIGH);
+}
+
+void turnRight() {
+  Serial.println("Turning Right");
+  setMotors(LOW, HIGH, LOW, LOW);
+}
+
+// Motor Control
 void setMotors(int m1Pin1State, int m1Pin2State, int m2Pin1State, int m2Pin2State) {
   digitalWrite(enablePinA, HIGH);
   digitalWrite(enablePinB, HIGH);
@@ -204,6 +153,7 @@ void setMotors(int m1Pin1State, int m1Pin2State, int m2Pin1State, int m2Pin2Stat
 }
 
 void stopMotors() {
+  Serial.println("Stopping Motors");
   digitalWrite(enablePinA, LOW);
   digitalWrite(enablePinB, LOW);
   digitalWrite(motor1Pin1, LOW);
@@ -212,14 +162,112 @@ void stopMotors() {
   digitalWrite(motor2Pin2, LOW);
 }
 
+// Obstacle Detection
+int getDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  int duration = pulseIn(echoPin, HIGH);
+
+  if (duration == 0) {
+    Serial.println("Sensor timeout. Invalid distance.");
+    return -1;  // Invalid distance
+  }
+  return duration * 0.034 / 2;  // Calculate distance
+}
+
+void onObstacleChange() {
+  int distance = getDistance();
+  if (distance != -1 && distance <= 20) { 
+    Serial.println("Obstacle detected!");
+    stopMotors();
+    soundBuzzer(4);
+    obstacle = true;
+  } else {
+    obstacle = false;
+  }
+}
+
+// Motion Detection
+void onAccZChange() {
+  if (a.acceleration.z < accelZFallThreshold && !fallDetected) {
+    Serial.println("FALL DETECTED!");
+    triggerEmergencyStop();
+    fallDetected = true;
+  } else if (a.acceleration.z >= accelZFallThreshold) {
+    fallDetected = false;
+  }
+}
+
+void onGyroZChange() {
+  if (abs(g.gyro.z) > gyroZTiltThreshold && !tiltDetected) {
+    Serial.println("TILT DETECTED!");
+    triggerEmergencyStop();
+    tiltDetected = true;
+  } else if (abs(g.gyro.z) <= gyroZTiltThreshold) {
+    tiltDetected = false;
+  }
+}
+
+// Emergency Stop
 void triggerEmergencyStop() {
   Serial.println("Emergency Stop Triggered!");
-    for (int i = 0; i < 4; i++){
-    tone(buzzer, 400);
+  soundBuzzer(4);
+  stopMotors();
+}
+
+// Buzzer Function
+void soundBuzzer(int count) {
+  for (int i = 0; i < count; i++) {
+    tone(buzzer, 1000);
     delay(500);
     noTone(buzzer);
-    }
-    stopMotors(); 
+    delay(500);
+  }
 }
+
+// CloudSwitch Handlers
+void onForwardChange() {
+  if (forward) {
+    moveForward();
+    forward = false;
+  }
+}
+
+void onBackwardChange() {
+  if (backward) {
+    moveBackward();
+    backward = false;
+  }
+}
+
+void onLeftChange() {
+  if (left) {
+    turnLeft();
+    left = false;
+  }
+}
+
+void onRightChange() {
+  if (right) {
+    turnRight();
+    right = false;
+  }
+}
+
+void onHaltChange() {
+  if (halt) {
+    stopMotors();
+    halt = false;
+  }
+}
+
+
+
+
+
+
 
 
