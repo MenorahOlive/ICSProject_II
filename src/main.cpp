@@ -1,18 +1,37 @@
-#include <Arduino.h>
-// Motor A
-int motor1Pin1 = 26; 
-int motor1Pin2 = 27; 
-int enablePinA = 25; 
-// Motor B 
-int motor2Pin1 = 14; 
-int motor2Pin2 = 12; 
-int enablePinB = 13; 
-//Ultrasonic sensor 
-const int trigPin = 32;
-const int echoPin = 33;
-//buzzer
-const int buzzer = 19;
+/*************************************************************
+  Integrating MPU6050, DC Motors, Ultrasonic Sensor, and Blynk
+ *************************************************************/
 
+/* Fill-in information from Blynk Device Info here */
+#define BLYNK_TEMPLATE_ID           " "
+#define BLYNK_TEMPLATE_NAME         " "
+#define BLYNK_AUTH_TOKEN            " "
+
+#define BLYNK_PRINT Serial
+
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <BlynkSimpleEsp32.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Wire.h>
+
+// WiFi credentials
+char ssid[] = " ";
+char pass[] = " ";
+
+// Pin definitions
+const int motor1Pin1 = 26, motor1Pin2 = 27, enablePinA = 25; //Motor A
+const int motor2Pin1 = 14, motor2Pin2 = 12, enablePinB = 13; //Motor B
+const int trigPin = 32, echoPin = 33, buzzer = 19;
+
+String command;
+
+Adafruit_MPU6050 mpu;
+
+BlynkTimer timer;
+
+// Stop all motors
 void stopMotors() {
   digitalWrite(enablePinA, LOW);
   digitalWrite(enablePinB, LOW);
@@ -22,7 +41,8 @@ void stopMotors() {
   digitalWrite(motor2Pin2, LOW);
 }
 
-  void setMotors(int m1Pin1State, int m1Pin2State, int m2Pin1State, int m2Pin2State) {
+// Move motors in specific directions
+void setMotors(int m1Pin1State, int m1Pin2State, int m2Pin1State, int m2Pin2State) {
   digitalWrite(enablePinA, HIGH);
   digitalWrite(enablePinB, HIGH);
   digitalWrite(motor1Pin1, m1Pin1State);
@@ -34,83 +54,104 @@ void stopMotors() {
 void directMotors(String command) {
   command.toLowerCase();
   if (command == "forward") {
-    Serial.println("Moving Forward");
-    setMotors(HIGH, LOW, HIGH, LOW);
+    setMotors(HIGH, LOW, HIGH, LOW); 
+    Blynk.virtualWrite(V0, "Moving forward");  
   } else if (command == "backward") {
-    Serial.println("Moving Backward");
-    setMotors(LOW, HIGH, LOW, HIGH);
+    setMotors(LOW, HIGH, LOW, HIGH);  
+    Blynk.virtualWrite(V0, "Moving backward");  
   } else if (command == "left") {
-    Serial.println("Turning Left");
-    setMotors(HIGH, LOW, LOW, LOW);
+    setMotors(HIGH, LOW, LOW, LOW);  
+    timer.setTimeout(800L, stopMotors);  
+    Blynk.virtualWrite(V0, "Turning left");  
   } else if (command == "right") {
-    Serial.println("Turning Right");
-    setMotors(LOW, LOW, HIGH, LOW);
+    setMotors(LOW, LOW, HIGH, LOW);  
+    timer.setTimeout(700L, stopMotors); 
+    Blynk.virtualWrite(V0, "Turning right");  
   } else if (command == "stop") {
-    Serial.println("Stopping Motors");
-    stopMotors();
+    stopMotors(); 
+    Blynk.virtualWrite(V0, "Motors stopped");  
   } else {
-    Serial.println("Unknown Command");
+    Blynk.virtualWrite(V0, "Invalid command");  
   }
 }
 
+BLYNK_WRITE(V0) {
+  command = param.asStr(); 
+  Serial.println("Received command: " + command);
+
+  directMotors(command);
+}
 
 void setup() {
-  // Initialize Motor Pins
+  Serial.begin(115200);
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+
+  // Initialize Motor pins
   pinMode(motor1Pin1, OUTPUT);
   pinMode(motor1Pin2, OUTPUT);
   pinMode(enablePinA, OUTPUT);
   pinMode(motor2Pin1, OUTPUT);
   pinMode(motor2Pin2, OUTPUT);
   pinMode(enablePinB, OUTPUT);
-  //Initialize Ultrasonic sensor 
-  pinMode(trigPin, OUTPUT);//trigger
-  pinMode(echoPin, INPUT);//echo
-  
-  Serial.begin(115200);
 
-  // testing
-  Serial.print("Testing DC Motor...");
+  // Initialize Ultrasonic sensor
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // Initialize buzzer
+  pinMode(buzzer, OUTPUT);
+
+  //setupt motion detection
+  mpu.setHighPassFilter(MPU6050_HIGHPASS_0_63_HZ);
+  mpu.setMotionDetectionThreshold(1);
+  mpu.setMotionDetectionDuration(20);
+  mpu.setInterruptPinLatch(true);	// Keep it latched.  Will turn off when reinitialized.
+  mpu.setInterruptPinPolarity(true);
+  mpu.setMotionInterrupt(true);
+
+  //Initialize mpu
+  if (!mpu.begin()) {
+  Serial.println("Failed to initialize MPU6050!");
+  while (1);
+  }
+  Serial.println("MPU6050 initialized successfully!");
+
   stopMotors();
 }
 
 void loop() {
-  if (Serial.available() > 0) {
+  Blynk.run();
+  timer.run();
 
-    String input = Serial.readString();
-    Serial.print("Command: ");
-    Serial.println(input);
-    input.trim();
-    digitalWrite(trigPin, LOW);
-    delay(2);
-    digitalWrite(trigPin, HIGH);
-    delay(10);
-    digitalWrite(trigPin, LOW);
-    int timetaken=pulseIn(echoPin,HIGH);
-    int distance = timetaken*0.034/2;
-    Serial.print("Distance=");
-    Serial.print(distance);
-    Serial.print("cm");
-    Serial.println("");
-    if(distance<20){
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  int distance = pulseIn(echoPin, HIGH) * 0.034 / 2;
+  Blynk.virtualWrite(V2, distance);  // Send distance to V2
+
+  if(distance<20){
     tone(buzzer, 500);
-    delay(1000);
+    timer.setTimeout(700L, stopMotors);
     noTone(buzzer);
-    delay(10);  
-    stopMotors();
+    Blynk.virtualWrite(V1, "Obstacle Detetcted");
     }
     else{
     noTone(buzzer);
-    directMotors(input);
     }
 
+  // MPU6050 Sensor
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  Blynk.virtualWrite(V3, a.acceleration.z);  // Send Accel Z to V3
+  Blynk.virtualWrite(V4, g.gyro.z);  // Send Gyro Z to V4
+
+  if (a.acceleration.z < 5.0){
+    Blynk.virtualWrite(V1, "Fall Detected");
+    Blynk.logEvent("falldetected");
   }
 
-  
- 
- 
+   
 }
-
-
-
-
-
