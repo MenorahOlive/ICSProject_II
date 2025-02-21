@@ -13,8 +13,8 @@
 #include <Wire.h>
 
 // WiFi credentials
-char ssid[] = "Strathmore";
-char pass[] = "5thrathm0re";
+char ssid[] = "";
+char pass[] = "";
 
 // Pin definitions
 const int motor1Pin1 = 26, motor1Pin2 = 27, enablePinA = 25; //Motor A
