@@ -59,21 +59,6 @@ The project includes comprehensive documentation covering:
 - Implement **machine learning** for path planning and obstacle classification.
 - Scale up the prototype for real-world testing with actual wheelchair users.
 
-## Soft Skills Demonstrated
-- **Problem-solving**: Designed a solution to address real-world challenges faced by visually impaired wheelchair users.
-- **Technical Writing**: Created detailed documentation for system design, testing, and user manuals.
-- **Collaboration**: Worked with cross-functional teams and mentors to refine the system.
-- **Time Management**: Delivered a working prototype within the project timeline.
-
-## Repository Structure
-/project
-│
-├── /docs # Project documentation (requirements, design diagrams, testing protocols)
-├── /src # Source code for the ESP32 and Blynk integration
-├── /hardware # Circuit diagrams and hardware setup instructions
-├── README.md # Project overview and setup instructions
-└── LICENSE # License information
-
 ## License
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
